@@ -1,0 +1,18 @@
+{
+  "configurations": [
+    {
+      "type": "aws-sam",
+      "request": "direct-invoke",
+      "name": "infra:TitlesSecureFunction",
+      "invokeTarget": {
+        "target": "template",
+        "templatePath": "infra/template.yaml",
+        "logicalId": "TitlesSecureFunction"
+      },
+      "lambda": {
+        "payload": {},
+        "environmentVariables": {}
+      }
+    }
+  ]
+}

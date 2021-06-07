@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: DataDog Tracing of API Gateway + Lambda
+
+Globals:
+  Function:
+    Timeout: 10
+  Api:
+    OpenApiVersion: 3.0.1
+
+    # Compression is triggered when response body size is greater than or equal to your configured threshold
+    MinimumCompressionSize: 1024
+
+    # TODO: make this more restrictive...
+    # SAM will automatically add AllowMethods with a list of methods for this API
+    Cors:
+      AllowOrigin: "'*'"
+      AllowHeaders: "'authorization, content-type'"
+    EndpointConfiguration: REGIONAL
+
+    TracingEnabled: true # Enable AWS X-Ray to help debug API requests
+
+    # Logging, Metrics, Throttling, and all other Stage settings
+    MethodSettings: [
+        {
+          # Turn on logging
+          "LoggingLevel": !Ref LoggingLevel,
+          # Enable Metrics
+          "MetricsEnabled": True,
+          # Trace-level Logging
+          "DataTraceEnabled": True,
+          # On all Paths & methods
+          "ResourcePath": "/*",
+          "HttpMethod": "*",
+        },
+      ]
+
+Parameters:
+  LoggingLevel:
+    Type: String
+    Default: "ERROR"
+
+  Appgroup:
+    Type: String
+    Default: "na"
+
+  Application:
+    Type: String
+    Default: "na"
+
+  Service:
+    Type: String
+    Default: "simple-rest-datadog-tracing"
+
+  Stage:
+    Type: String
+    Description: "The deploy Stage of your API"
+    Default: deploy
+
+  Environment:
+    Type: String
+    Description: ""
+    Default: dev
+
+  DDForwarderFunctionName:
+    Type: String
+    Description: "The name of the installed DataDog forwarder lambda"
+
+Resources:
+  TitlesApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Stage
+      Name: !Sub "${Appgroup}-${Application}-${Environment}-${Service}"
+      AccessLogSetting:
+        DestinationArn: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:${ApiAccessLogGroup}'
+        Format: '{ 
+            "requestId": "$context.requestId", 
+            "ip": "$context.identity.sourceIp", 
+            "caller": "$context.identity.caller", 
+            "user": "$context.identity.user", 
+            "requestTime": $context.requestTimeEpoch, 
+            "httpMethod": "$context.httpMethod", 
+            "resourcePath": "$context.resourcePath", 
+            "status": $context.status, 
+            "protocol":"$context.protocol", 
+            "responseLength":$context.responseLength ,
+            "authError": "$context.authorize.error",
+            "authStatusCode": "$context.authorize.status"	,
+            "authorizerErrMsg": "$context.authorizer.error",
+            "authorizerStatusCode": "$context.authorizer.status",
+            "wafErrorMessage": "$context.waf.error",
+            "wafStatusCode": "$context.waf.status"	
+        }'
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: [ TitlesApi ]
+    Properties:
+      # TODO: DataDog says name needs to start with "api-gateway". Why??
+      LogGroupName: !Sub api-gateway-${TitlesApi}
+      RetentionInDays: 3
+
+  # DataDog subscription to API Gateway Logs
+  SubscriptionFilter: 
+    Type: AWS::Logs::SubscriptionFilter
+    Properties: 
+      LogGroupName: 
+        Ref: "ApiAccessLogGroup"
+      FilterPattern: ""
+      DestinationArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${DDForwarderFunctionName}"
+
+  FunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DependsOn: [ TitlesSecureFunction ]
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${TitlesSecureFunction}
+      RetentionInDays: 3
+
+  TitlesSecureFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ../src
+      Handler: app.handler
+      # Note: we want to use !Sub in function name...
+      # FunctionName: "datadog-poc-getTitles"
+      FunctionName: !Sub "${Appgroup}-${Application}-${Environment}-${Service}-getTitles"
+      MemorySize: 1024
+      Runtime: nodejs12.x
+      Events:
+        Root:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TitlesApi
+            Path: /v1/titles
+            Method: GET
+
+  TitlesSecureFunctionSubscriptionFilter:
+    Type: "AWS::Logs::SubscriptionFilter"
+    DependsOn: [ FunctionLogGroup ]
+    Properties:
+      DestinationArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${DDForwarderFunctionName}"
+      LogGroupName: !Sub /aws/lambda/${TitlesSecureFunction}
+      FilterPattern: ""
+
+Transform:
+  - AWS::Serverless-2016-10-31
+  - Name: DatadogServerless
+    Parameters:
+      stackName: !Ref "AWS::StackName"
+      nodeLayerVersion: "53"
+      enableDDTracing: true
+      enableXrayTracing: true
+      # extensionLayerVersion: "8"
+      # apiKey: "ba366d08c056215c69ee0ee0a75da240"
+      # forwarderArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${DDForwarderFunctionName}"
+      service: !Ref Service
+      env: !Ref Environment
+
+Outputs:
+  DirectApiURL:
+    Description: "Call the API with"
+    Value: !Sub "curl 'https://${TitlesApi}.execute-api.${AWS::Region}.amazonaws.com/${Stage}/v1/titles?name=Ben'"
