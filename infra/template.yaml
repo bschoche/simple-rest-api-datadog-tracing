@@ -152,7 +152,6 @@ Transform:
       enableDDTracing: true
       enableXrayTracing: true
       # extensionLayerVersion: "8"
-      # apiKey: "ba366d08c056215c69ee0ee0a75da240"
       # forwarderArn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${DDForwarderFunctionName}"
       service: !Ref Service
       env: !Ref Environment
